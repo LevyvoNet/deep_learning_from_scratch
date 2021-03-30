@@ -3,7 +3,6 @@ import numpy as np
 import random
 import math
 from keras.datasets import mnist
-from sklearn.model_selection import train_test_split
 
 EPSILON = 1e-7
 
@@ -25,7 +24,7 @@ def initialize_parameters(layer_dims: typing.List):
     params = {}
 
     for i in range(1, len(layer_dims)):
-        params[f'W{i}'] = np.random.randn(layer_dims[i], layer_dims[i - 1]) * np.sqrt(1. / layer_dims[i - 1])
+        params[f'W{i}'] = np.random.randn(layer_dims[i], layer_dims[i - 1]) * np.sqrt(2. / layer_dims[i - 1])
         params[f'b{i}'] = np.zeros(([layer_dims[i], 1])) * np.sqrt(1. / layer_dims[i - 1])
 
     return params
@@ -72,7 +71,7 @@ def apply_batchnorm(A):
     """Apply batch normalization on the output of a layer (which is the input of the next one)"""
     A_mean = np.sum(A) / A.shape[0]
     A_var = np.sum((A - A_mean) ** 2) / A.shape[0]
-    A_bn = (A - A_mean) / np.sqrt((A_var + 1e-7))
+    A_bn = (A - A_mean) / np.sqrt((A_var + EPSILON))
 
     return A_bn
 
@@ -139,31 +138,6 @@ def linear_backward(dZ, cache):
     }
 
 
-def softmax_derivative(cache):
-    """Calculate the derivative of Softmax
-
-    Args:
-        cache (dict). The cache contains W, b, A_prev, Z of the requested layer.
-
-    Returns:
-        dg. The derivative of the Softmax (dg(Z))
-    """
-
-    jacobian = np.zeros(A.shape)
-
-    for col in range(A.shape[1]):
-        for row in range(A.shape[0]):
-            # For each
-            dg[row][col] = A[row][col] * (1 - A[row][col])
-
-    dg_same = np.multiply(A, 1 - A)
-    dg_different = np.multiply()
-
-    # TODO: add dg for the non-same-index part (-y_i*y_j)
-
-    return dg
-
-
 def relu_backward(dA, cache):
     """dA is basically W*dZ"""
     Z = cache['Z']
@@ -176,7 +150,11 @@ def relu_backward(dA, cache):
     return dZ
 
 
-def softmax_backward(dA, cache):
+def only_softmax_backward(dA, cache):
+    """Compute the derivative of softmax only - independently from Cross Entropy loss function
+
+    NOTE: this function is not used because the combination softmax and CE is more efficient.
+    """
     Z = cache['Z']
     # TODO: maybe save A in cache instead of re-computing?
     A = softmax(Z)[0]
@@ -188,7 +166,6 @@ def softmax_backward(dA, cache):
     # for each instance, compute its jacobian and then its dZ
     dZ = np.zeros((A.shape[0], m))
     for m_i in range(m):
-
         # Compute the jacobian of the instance softmax
         jacobian = np.zeros((A.shape[0], A.shape[0]))
         a = A[:, m_i]
@@ -205,6 +182,31 @@ def softmax_backward(dA, cache):
                               for k in range(len(jacobian))])
 
     return dZ
+
+
+def softmax_ce_backward(dA, cache):
+    """Softmax and Cross Entropy backward propagation
+
+    This function combines softmax and CE in order to compute the dZ of the last layer of the network and the
+    loss 'layer'.
+    This function assumes that dA contains Y (the ground truth labels) in order to compute the A-Y function.
+    """
+    Z = cache['Z']
+    # TODO: maybe save A in cache instead of re-computing?
+    A = softmax(Z)[0]
+
+    # This functoin assumes that dA contains Y (the ground truth labels)
+    Y = dA
+
+    # The derivative of CE loss with respect to Z of the softmax layer is A-Y
+    # (where A is the post-softmax activation values and Y is the true labels)
+    dZ = A - Y
+
+    return dZ
+
+
+def softmax_backward(dA, cache):
+    return softmax_ce_backward(dA, cache)
 
 
 ACTIVATION_BACKWARD_STR_TO_FUNC = {
@@ -225,11 +227,13 @@ def L_model_backward(AL, Y, caches):
     grads = {}
 
     # Calculate the derivatives of the loss function in terms of AL - the output of the final layer
-    dAL = -np.divide(Y, AL)
+    # dA = -np.divide(Y, AL)
+    # Put Y in dA in order to efficiently combine the derivatives of softmax and Cross Entropy.
+    dA = Y
 
     # Perform the back propagation for the final, softmax layer
-    grads["dA{layer_count}"] = dAL
-    curr_grads = linear_activation_backward(dAL, caches[-1], 'softmax')
+    grads["dA{layer_count}"] = dA
+    curr_grads = linear_activation_backward(dA, caches[-1], 'softmax')
     grads[f'dW{layer_count}'] = curr_grads['dW']
     grads[f'db{layer_count}'] = curr_grads['db']
 
@@ -256,6 +260,8 @@ def update_parameters(parameters, grads, learning_rate):
     return parameters
 
 
+# Model #####################################################################################################
+
 def generate_batches(X, Y, batch_size):
     """Generate random batches of the given size from the given instances.
 
@@ -280,22 +286,22 @@ def generate_batches(X, Y, batch_size):
 
 def train_model(params, X, Y, learning_rate, num_iterations, batch_size):
     """Train the given parameters more times (assuming RELU for all middle layers and softmax for the last one)"""
-    for epoch_idx in range(num_iterations):
-        epoch_total_cost = 0
-        for batch_idx, (X_batch, Y_batch) in enumerate(generate_batches(X, Y, batch_size)):
+    iters_count = 0
+    costs = []
+    while iters_count < num_iterations:
+        batches = generate_batches(X, Y, batch_size)
+        for X_batch, Y_batch in batches:
+            iters_count += 1
             AL, caches = L_model_forward(X_batch, params, use_batchnorm=False)
-
-            # Calculate batch cost
-            cost = compute_cost(AL, Y_batch)
-            epoch_total_cost += cost
-
             grads = L_model_backward(AL, Y_batch, caches)
             params = update_parameters(params, grads, learning_rate)
 
-        print(f'epoch total cost:{epoch_total_cost}')
-        if (epoch_idx + 1) % 100 == 0:
-            print(f'Training cost is {epoch_total_cost}')
-            costs.append(epoch_total_cost)
+            if iters_count % 100 == 0:
+                iter_cost = compute_cost(AL, Y_batch)
+                costs.append(iter_cost)
+
+            if iters_count == num_iterations:
+                return params, costs
 
     return params, costs
 
@@ -317,7 +323,36 @@ def predict(X, Y, parameters):
     return correct / all
 
 
-if __name__ == '__main__':
+def get_mnist_data_mine():
+    val_size = 0.2
+
+    (train_X, train_y), (test_X, test_y) = mnist.load_data()
+
+    # float 0-1
+    train_X = train_X.reshape(784, train_X.shape[0]).astype('float32') / 255.
+    X_te = test_X.reshape(784, test_X.shape[0]).astype('float32') / 255.
+
+    # 1hot encoding
+    y_tr_enc = np.zeros((10, len(train_y)), np.float32)
+    y_tr_enc[train_y, range(y_tr_enc.shape[1])] = 1
+    y_te_enc = np.zeros((10, len(test_y)), np.float32)
+    y_te_enc[test_y, range(y_te_enc.shape[1])] = 1
+
+    # train_val_split
+    def train_val_split(X, y, val_size):
+        train_size = np.int(X.shape[1] * (1 - val_size))
+        X_train, X_val = X[:, :train_size], X[:, train_size:]
+        y_train, y_val = y[:, :train_size], y[:, train_size:]
+        return X_train, X_val, y_train, y_val
+
+    X_tr, X_val, y_tr, y_val = train_val_split(train_X, y_tr_enc, val_size)
+
+    return X_tr, X_val, X_te, y_tr, y_val, y_te_enc
+
+
+def get_mnist_data_his():
+    val_size = 0.2
+
     (train_X, train_y), (test_X, test_y) = mnist.load_data()
 
     # float 0-1
@@ -325,33 +360,66 @@ if __name__ == '__main__':
     test_X = test_X.reshape(test_X.shape[0], 784).astype('float32') / 255.
 
     # 1hot encoding
-    y_enc = np.zeros((len(train_y), 10), np.float32)
-    y_enc[range(y_enc.shape[0]), train_y] = 1
+    y_tr_enc = np.zeros((len(train_y), 10), np.float32)
+    y_tr_enc[range(y_tr_enc.shape[0]), train_y] = 1
+    y_te_enc = np.zeros((len(test_y), 10), np.float32)
+    y_te_enc[range(y_te_enc.shape[0]), test_y] = 1
 
-    # train_test_split
-    X_tr, X_val, y_tr, y_val = train_test_split(train_X, y_enc, test_size=0.2, random_state=42)
+    # train_val_split
+    def train_val_split(train_X, y_enc, val_size):
+        tr_sz = np.int(train_X.shape[0] * (1 - val_size))
+        X_train, X_val = train_X[:tr_sz], train_X[tr_sz:]
+        y_train, y_val = y_enc[:tr_sz], y_enc[tr_sz:]
+        return X_train, X_val, y_train, y_val
+
+    X_tr, X_val, y_tr, y_val = train_val_split(train_X, y_tr_enc, val_size)
 
     # transpose
     X_tr = X_tr.T
-    X_te = X_val.T
+    X_val = X_val.T
     y_tr = y_tr.T
-    y_te = y_val.T
+    y_val = y_val.T
+    X_te = test_X.T
+    y_te = y_te_enc.T
+
+    return X_tr, X_val, X_te, y_tr, y_val, y_te
+
+
+def main():
+    # Experiment variables
+    layers_dims = [784, 20, 7, 5, 10]
+    learning_rate = 0.009
+    batch_size = 512
+    improvement_threshold = 0.001
+
+    X_tr, X_val, X_te, y_tr, y_val, y_te = get_mnist_data_his()
 
     # Train until there is no significant improvement on the validation set ##############################
 
-    # Train for first 100 iterations
-    model_params, costs = L_layer_model(X_tr, y_tr, [784, 20, 7, 5, 10], 0.009, 100, 512)
+    # Initialize the model
+    model_params, costs = L_layer_model(X_tr, y_tr, layers_dims, learning_rate, 0, batch_size)
+    iters_count = 0
     acc = predict(X_val, y_val, model_params)
-    delta = 100
+    print(f'initial accuracy is {round(acc * 100, 1)}')
+
+    # This is just a dummy value for the first time, we need to get into the while loop
+    acc_improvement = improvement_threshold
+    num_iterations = 100
 
     # Keep training the model until the improvement is less than 1 percent
-    while delta > 1:
-        model_params, new_costs = train_model(model_params, X_tr, y_tr, 0.009, 100, 64)
+    while acc_improvement >= improvement_threshold:
+        model_params, new_costs = train_model(model_params, X_tr, y_tr, learning_rate, 100, batch_size)
+        iters_count += 1
         costs += new_costs
 
-        new_acc = predict(X_te, y_te, model_params)
-        delta = ((new_acc - acc) / acc) * 100
-        print(f'new accuracy: {new_acc}, previous accuracy: {acc}')
+        new_acc = predict(X_val, y_val, model_params)
+        print(f'iter {iters_count * num_iterations}, accuracy is {round(new_acc * 100, 1)}, cost is {costs[-1]}')
+        if new_acc == 0 or acc == 0:
+            # If the results are bad keep training the model
+            acc_improvement = improvement_threshold
+        else:
+            acc_improvement = new_acc - acc
+
         acc = new_acc
 
     # Test the model on the test set
@@ -361,5 +429,9 @@ if __name__ == '__main__':
     for i, cost in enumerate(costs):
         print(f'cost of {(i + 1) * 100} step is {cost}')
 
-    print(f'final accuracy on validation set is {acc}')
-    print(f'accuracy on test set is {test_acc}')
+    print(f'final accuracy on validation set is {round(acc * 100, 1)}')
+    print(f'accuracy on test set is {round(test_acc * 100, 1)}')
+
+
+if __name__ == '__main__':
+    main()
