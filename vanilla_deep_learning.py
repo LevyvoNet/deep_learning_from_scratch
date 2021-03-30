@@ -408,7 +408,7 @@ def main():
 
     # Keep training the model until the improvement is less than 1 percent
     while acc_improvement >= improvement_threshold:
-        model_params, new_costs = train_model(model_params, X_tr, y_tr, learning_rate, 100, batch_size)
+        model_params, new_costs = train_model(model_params, X_tr, y_tr, learning_rate, num_iterations, batch_size)
         iters_count += 1
         costs += new_costs
 
@@ -427,7 +427,7 @@ def main():
 
     # Print stats
     for i, cost in enumerate(costs):
-        print(f'cost of {(i + 1) * 100} step is {cost}')
+        print(f'cost of {(i + 1) * num_iterations} step is {cost}')
 
     print(f'final accuracy on validation set is {round(acc * 100, 1)}')
     print(f'accuracy on test set is {round(test_acc * 100, 1)}')
