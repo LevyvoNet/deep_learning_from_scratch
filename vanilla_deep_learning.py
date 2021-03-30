@@ -94,12 +94,15 @@ def L_model_forward(X, parameters, use_batchnorm):
         if use_batchnorm:
             A = apply_batchnorm(A)
 
+        # Update the activation value (possibly after batch normalization)
+        cache.update({'A': A})
         caches.append(cache)
 
     # Perform the output layer - softmax
     W = parameters[f'W{layers_count}']
     b = parameters[f'b{layers_count}']
     AL, cache = linear_activation_forward(A, W, b, 'softmax')
+    cache.update({'A': AL})
     caches.append(cache)
 
     return AL, caches
@@ -155,9 +158,7 @@ def only_softmax_backward(dA, cache):
 
     NOTE: this function is not used because the combination softmax and CE is more efficient.
     """
-    Z = cache['Z']
-    # TODO: maybe save A in cache instead of re-computing?
-    A = softmax(Z)[0]
+    A = cache['A']
 
     # Calculate the partial derivatives of each of the softmax output with respect
     # to each of the z_i variables
@@ -191,9 +192,10 @@ def softmax_ce_backward(dA, cache):
     loss 'layer'.
     This function assumes that dA contains Y (the ground truth labels) in order to compute the A-Y function.
     """
-    Z = cache['Z']
+    # Z = cache['Z']
     # TODO: maybe save A in cache instead of re-computing?
-    A = softmax(Z)[0]
+    # A = softmax(Z)[0]
+    A = cache['A']
 
     # This functoin assumes that dA contains Y (the ground truth labels)
     Y = dA
