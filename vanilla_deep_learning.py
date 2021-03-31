@@ -3,8 +3,10 @@ import numpy as np
 import random
 import math
 from keras.datasets import mnist
+from numpy.random import seed
 
 EPSILON = 1e-7
+USE_BATCHNORM = False
 
 
 # Forward Propagation ###################################################################################
@@ -57,23 +59,29 @@ ACTIVATION_STR_TO_FUNC = {
 }
 
 
-def linear_activation_forward(A_prev, W, b, activation_func_str):
+def linear_activation_forward(A_prev, W, b, activation_func_str, use_batchnorm):
     activation_func = ACTIVATION_STR_TO_FUNC[activation_func_str]
     Z, cache = linear_forward(A_prev, W, b)
-    A, _ = activation_func(Z)
 
+    if use_batchnorm:
+        Z = apply_batchnorm(Z)
+
+    # Update the activation value (possibly after batch normalization)
     cache.update({'Z': Z})
+    A, _ = activation_func(Z)
+    cache.update({'A': A})
 
     return A, cache
 
 
-def apply_batchnorm(A):
-    """Apply batch normalization on the output of a layer (which is the input of the next one)"""
-    A_mean = np.sum(A) / A.shape[0]
-    A_var = np.sum((A - A_mean) ** 2) / A.shape[0]
-    A_bn = (A - A_mean) / np.sqrt((A_var + EPSILON))
+def apply_batchnorm(Z):
+    """Apply batch normalization on the output of a layer"""
+    m = Z.shape[0]
+    Z_mean = np.sum(Z, axis=0) / m
+    Z_var = np.sum((Z - Z_mean) ** 2, axis=0) / m
+    Z_bn = (Z - Z_mean) / np.sqrt((Z_var + EPSILON))
 
-    return A_bn
+    return Z_bn
 
 
 def L_model_forward(X, parameters, use_batchnorm):
@@ -89,19 +97,14 @@ def L_model_forward(X, parameters, use_batchnorm):
     for layer_idx in range(1, layers_count):
         W = parameters[f'W{layer_idx}']
         b = parameters[f'b{layer_idx}']
-        A, cache = linear_activation_forward(A, W, b, 'relu')
-
-        if use_batchnorm:
-            A = apply_batchnorm(A)
-
-        # Update the activation value (possibly after batch normalization)
-        cache.update({'A': A})
+        A, cache = linear_activation_forward(A, W, b, 'relu', use_batchnorm=use_batchnorm)
         caches.append(cache)
 
     # Perform the output layer - softmax
     W = parameters[f'W{layers_count}']
     b = parameters[f'b{layers_count}']
-    AL, cache = linear_activation_forward(A, W, b, 'softmax')
+    # Don't apply batchnorm on the output of the last layer
+    AL, cache = linear_activation_forward(A, W, b, 'softmax', use_batchnorm=False)
     cache.update({'A': AL})
     caches.append(cache)
 
@@ -294,7 +297,7 @@ def train_model(params, X, Y, learning_rate, num_iterations, batch_size):
         batches = generate_batches(X, Y, batch_size)
         for X_batch, Y_batch in batches:
             iters_count += 1
-            AL, caches = L_model_forward(X_batch, params, use_batchnorm=False)
+            AL, caches = L_model_forward(X_batch, params, use_batchnorm=USE_BATCHNORM)
             grads = L_model_backward(AL, Y_batch, caches)
             params = update_parameters(params, grads, learning_rate)
 
@@ -315,7 +318,7 @@ def L_layer_model(X, Y, layers_dims, learning_rate, num_iterations, batch_size):
 
 
 def predict(X, Y, parameters):
-    AL, _ = L_model_forward(X, parameters, False)
+    AL, _ = L_model_forward(X, parameters, use_batchnorm=False)
     outputs = np.argmax(AL, axis=0)
     y = np.argmax(Y, axis=0)
 
@@ -388,6 +391,9 @@ def get_mnist_data_his():
 
 
 def main():
+    # Set the random seed to be a constant
+    seed(1)
+
     # Experiment variables
     layers_dims = [784, 20, 7, 5, 10]
     learning_rate = 0.009
@@ -427,12 +433,12 @@ def main():
     # Test the model on the test set
     test_acc = predict(X_te, y_te, model_params)
 
-    # Print stats
-    for i, cost in enumerate(costs):
-        print(f'cost of {(i + 1) * num_iterations} step is {cost}')
+    # Test the model on the train set
+    train_acc = predict(X_tr, y_tr, model_params)
 
+    print(f'final accuracy on train set is {round(train_acc * 100, 1)}')
     print(f'final accuracy on validation set is {round(acc * 100, 1)}')
-    print(f'accuracy on test set is {round(test_acc * 100, 1)}')
+    print(f'final accuracy on test set is {round(test_acc * 100, 1)}')
 
 
 if __name__ == '__main__':
