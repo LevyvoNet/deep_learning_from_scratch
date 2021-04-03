@@ -2,10 +2,13 @@ import typing
 import numpy as np
 import random
 import math
+import time
 from keras.datasets import mnist
 from numpy.random import seed
 
 EPSILON = 1e-7
+
+# Whether to apply batch normalization or not.
 USE_BATCHNORM = False
 
 
@@ -59,12 +62,9 @@ ACTIVATION_STR_TO_FUNC = {
 }
 
 
-def linear_activation_forward(A_prev, W, b, activation_func_str, use_batchnorm):
+def linear_activation_forward(A_prev, W, b, activation_func_str):
     activation_func = ACTIVATION_STR_TO_FUNC[activation_func_str]
     Z, cache = linear_forward(A_prev, W, b)
-
-    if use_batchnorm:
-        Z = apply_batchnorm(Z)
 
     # Update the activation value (possibly after batch normalization)
     cache.update({'Z': Z})
@@ -74,14 +74,14 @@ def linear_activation_forward(A_prev, W, b, activation_func_str, use_batchnorm):
     return A, cache
 
 
-def apply_batchnorm(Z):
+def apply_batchnorm(A):
     """Apply batch normalization on the output of a layer"""
-    m = Z.shape[0]
-    Z_mean = np.sum(Z, axis=0) / m
-    Z_var = np.sum((Z - Z_mean) ** 2, axis=0) / m
-    Z_bn = (Z - Z_mean) / np.sqrt((Z_var + EPSILON))
-
-    return Z_bn
+    A = A.T
+    m = A.shape[0]
+    A_mean = np.sum(A, axis=0) / m
+    A_var = np.sum((A - A_mean) ** 2, axis=0) / m
+    A_bn = (A - A_mean) / np.sqrt((A_var + EPSILON))
+    return A_bn.T
 
 
 def L_model_forward(X, parameters, use_batchnorm):
@@ -97,14 +97,19 @@ def L_model_forward(X, parameters, use_batchnorm):
     for layer_idx in range(1, layers_count):
         W = parameters[f'W{layer_idx}']
         b = parameters[f'b{layer_idx}']
-        A, cache = linear_activation_forward(A, W, b, 'relu', use_batchnorm=use_batchnorm)
+        A, cache = linear_activation_forward(A, W, b, 'relu')
+
+        if use_batchnorm:
+            A = apply_batchnorm(A)
+            cache['A'] = A
+
         caches.append(cache)
 
     # Perform the output layer - softmax
     W = parameters[f'W{layers_count}']
     b = parameters[f'b{layers_count}']
     # Don't apply batchnorm on the output of the last layer
-    AL, cache = linear_activation_forward(A, W, b, 'softmax', use_batchnorm=False)
+    AL, cache = linear_activation_forward(A, W, b, 'softmax')
     cache.update({'A': AL})
     caches.append(cache)
 
@@ -200,7 +205,7 @@ def softmax_ce_backward(dA, cache):
     # A = softmax(Z)[0]
     A = cache['A']
 
-    # This functoin assumes that dA contains Y (the ground truth labels)
+    # This function assumes that dA contains Y (the ground truth labels)
     Y = dA
 
     # The derivative of CE loss with respect to Z of the softmax layer is A-Y
@@ -232,6 +237,7 @@ def L_model_backward(AL, Y, caches):
     grads = {}
 
     # Calculate the derivatives of the loss function in terms of AL - the output of the final layer
+    # This is commented out because we are using the combined derivative for both cross entropy and softmax
     # dA = -np.divide(Y, AL)
     # Put Y in dA in order to efficiently combine the derivatives of softmax and Cross Entropy.
     dA = Y
@@ -318,7 +324,7 @@ def L_layer_model(X, Y, layers_dims, learning_rate, num_iterations, batch_size):
 
 
 def predict(X, Y, parameters):
-    AL, _ = L_model_forward(X, parameters, use_batchnorm=False)
+    AL, _ = L_model_forward(X, parameters, use_batchnorm=USE_BATCHNORM)
     outputs = np.argmax(AL, axis=0)
     y = np.argmax(Y, axis=0)
 
@@ -328,34 +334,7 @@ def predict(X, Y, parameters):
     return correct / all
 
 
-def get_mnist_data_mine():
-    val_size = 0.2
-
-    (train_X, train_y), (test_X, test_y) = mnist.load_data()
-
-    # float 0-1
-    train_X = train_X.reshape(784, train_X.shape[0]).astype('float32') / 255.
-    X_te = test_X.reshape(784, test_X.shape[0]).astype('float32') / 255.
-
-    # 1hot encoding
-    y_tr_enc = np.zeros((10, len(train_y)), np.float32)
-    y_tr_enc[train_y, range(y_tr_enc.shape[1])] = 1
-    y_te_enc = np.zeros((10, len(test_y)), np.float32)
-    y_te_enc[test_y, range(y_te_enc.shape[1])] = 1
-
-    # train_val_split
-    def train_val_split(X, y, val_size):
-        train_size = np.int(X.shape[1] * (1 - val_size))
-        X_train, X_val = X[:, :train_size], X[:, train_size:]
-        y_train, y_val = y[:, :train_size], y[:, train_size:]
-        return X_train, X_val, y_train, y_val
-
-    X_tr, X_val, y_tr, y_val = train_val_split(train_X, y_tr_enc, val_size)
-
-    return X_tr, X_val, X_te, y_tr, y_val, y_te_enc
-
-
-def get_mnist_data_his():
+def get_mnist_data():
     val_size = 0.2
 
     (train_X, train_y), (test_X, test_y) = mnist.load_data()
@@ -400,7 +379,7 @@ def main():
     batch_size = 512
     improvement_threshold = 0.001
 
-    X_tr, X_val, X_te, y_tr, y_val, y_te = get_mnist_data_his()
+    X_tr, X_val, X_te, y_tr, y_val, y_te = get_mnist_data()
 
     # Train until there is no significant improvement on the validation set ##############################
 
@@ -414,7 +393,8 @@ def main():
     acc_improvement = improvement_threshold
     num_iterations = 100
 
-    # Keep training the model until the improvement is less than 1 percent
+    start_time = time.time()
+    # Train the model until the improvement is less than 1 percent
     while acc_improvement >= improvement_threshold:
         model_params, new_costs = train_model(model_params, X_tr, y_tr, learning_rate, num_iterations, batch_size)
         iters_count += 1
@@ -430,6 +410,8 @@ def main():
 
         acc = new_acc
 
+    print(f'training took {time.time() - start_time} seconds')
+
     # Test the model on the test set
     test_acc = predict(X_te, y_te, model_params)
 
@@ -439,6 +421,10 @@ def main():
     print(f'final accuracy on train set is {round(train_acc * 100, 1)}')
     print(f'final accuracy on validation set is {round(acc * 100, 1)}')
     print(f'final accuracy on test set is {round(test_acc * 100, 1)}')
+
+    print(f'batch size is {batch_size}')
+    print(f'ran {iters_count * num_iterations} iterations')
+    print(f'ran {int(iters_count * num_iterations / batch_size)} epochs')
 
 
 if __name__ == '__main__':
